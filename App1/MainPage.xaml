@@ -9,6 +9,6 @@
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
 
     <Grid>
-
+        <Image Source="Assets/hs-2013-17-a-xlarge_web.jpg" Stretch="None" />
     </Grid>
 </Page>
