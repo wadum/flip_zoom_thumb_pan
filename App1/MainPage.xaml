@@ -9,6 +9,13 @@
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
 
     <Grid>
-        <Image Source="Assets/hs-2013-17-a-xlarge_web.jpg" Stretch="None" />
+        <Canvas x:Name="ImageCanvas" ManipulationMode="All" Height="640" VerticalAlignment="Top" HorizontalAlignment="Right" Width="400">
+            <Image x:Name="ManipulateImage" Source="Assets/hs-2013-17-a-xlarge_web.jpg" Stretch="None"  Margin="-440,-320" RenderTransformOrigin="0.5,0.5">
+                <Image.RenderTransform>
+                    <CompositeTransform ScaleX="1.5" ScaleY="1.5"/>
+                </Image.RenderTransform>
+            </Image>
+        </Canvas>
     </Grid>
+
 </Page>
