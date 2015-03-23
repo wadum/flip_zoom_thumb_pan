@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Threading.Tasks;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
 using Windows.UI.Xaml;
@@ -17,7 +18,9 @@ using Windows.Devices.Enumeration;
 using Windows.Media.Capture;
 using Windows.Devices.Sensors;
 using Windows.UI.Core;
-
+using Microsoft.WindowsAzure.MobileServices;
+using OnlineRandomForest;
+using System.Threading;
 // The Blank Page item template is documented at http://go.microsoft.com/fwlink/?LinkId=391641
 
 namespace App1
@@ -27,14 +30,26 @@ namespace App1
     /// </summary>
     public sealed partial class MainPage : Page
     {
-        TransformGroup _transformGroup;
-        MatrixTransform _previousTransform;
-        CompositeTransform _compositeTransform;
-        Accelerometer _accelerometer;
-        Gyrometer _gyrometer;
-        uint _desiredReportInterval = 100;
-        private double _scaleFactor = 0.2;
-        private double _zoomThreshold = 0.15;
+        volatile TransformGroup _transformGroup;
+        volatile MatrixTransform _previousTransform;
+        volatile CompositeTransform _compositeTransform;
+        volatile ScaleTransform _scaleTransform;
+        volatile Accelerometer _accelerometer;
+        volatile Gyrometer _gyrometer;
+        uint _desiredReportInterval = 200;
+        private double _scaleFactorUp = 0.2;
+        private double _scaleFactorDown = 0.25;
+        private double _zoomThreshold = 30;
+        private static volatile AccelerometerReading _previousAccelReading;
+        private static volatile GyrometerReading _previousGyroReading;
+        static readonly object lockObject = new object();
+
+        private int NOTHING = 0, ROTATE_LEFT = 1, ROTATE_RIGHT = 2, ZOOM_IN = 3, ZOOM_OUT = 4;
+        private OnlineRandomForest.OnlineRandomForest orf;
+        private IMobileServiceTable<OnlineRandomForest.Input> table;
+        private TypedEventHandler<Gyrometer, GyrometerReadingChangedEventArgs> _gyroEvent;
+        private Inclinometer _inclinometer;
+        private InclinometerReading _previousInclinometerReading;
 
 
         public MainPage()
@@ -50,26 +65,101 @@ namespace App1
             InitManipulationTransforms();
             InitAccelerometer();
             InitGyrometer();
+            InitORF();
+            InitInclinometer();
         }
 
-        private void InitGyrometer()
+        private async void InitORF()
         {
-            _gyrometer = Gyrometer.GetDefault();
-            _gyrometer.ReportInterval = _desiredReportInterval;
+            orf = new OnlineRandomForest.OnlineRandomForest();
 
-            //_gyrometer.ReadingChanged += new TypedEventHandler<Gyrometer, GyrometerReadingChangedEventArgs>(GyroReadingChanged);
+            Input item = new Input();
+            table = App.MobileService.GetTable<Input>();
+            await table.InsertAsync(item);
+
+            item.Features = new List<double>(){1d};
+
+            await table.UpdateAsync(item);
         }
 
         private void InitManipulationTransforms()
         {
             _transformGroup = new TransformGroup();
             _compositeTransform = new CompositeTransform();
+            _scaleTransform = new ScaleTransform();
             _previousTransform = new MatrixTransform() { Matrix = Matrix.Identity };
 
             _transformGroup.Children.Add(_previousTransform);
             _transformGroup.Children.Add(_compositeTransform);
+            _transformGroup.Children.Add(_scaleTransform);
 
             ManipulateImage.RenderTransform = _transformGroup;
+        }
+
+        private void InitGyrometer()
+        {
+            _gyrometer = Gyrometer.GetDefault();
+            _gyrometer.ReportInterval = _desiredReportInterval;
+            //_gyroEvent = new TypedEventHandler<Gyrometer, GyrometerReadingChangedEventArgs>(GyroReadingChanged);
+            _gyrometer.ReadingChanged += _gyroEvent;
+            _previousGyroReading = _gyrometer.GetCurrentReading();
+        }
+
+        async void GyroReadingChanged(object sender, GyrometerReadingChangedEventArgs e)
+        {
+            await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            {
+                GyrometerReading reading = e.Reading;
+
+                double delta = reading.AngularVelocityX - _previousGyroReading.AngularVelocityX;
+
+                if (delta > _zoomThreshold)
+                {
+                    Debug.WriteLine("reading up: " + delta);
+                    Debug.WriteLine("next: " + reading.AngularVelocityX);
+                    Debug.WriteLine("prev: " + _previousGyroReading.AngularVelocityX);
+                    _compositeTransform.ScaleX = _compositeTransform.ScaleY += _scaleFactorUp;
+                }
+                else if (delta < -_zoomThreshold)
+                {
+                    Debug.WriteLine("reading down: " + delta);
+                    _compositeTransform.ScaleX = _compositeTransform.ScaleY -= _scaleFactorDown;
+                }
+                _previousGyroReading = reading;
+            });
+        }
+
+        private void InitInclinometer()
+        {
+            _inclinometer = Inclinometer.GetDefault();
+            _inclinometer.ReportInterval = _desiredReportInterval;
+            _inclinometer.ReadingChanged += new TypedEventHandler<Inclinometer, InclinometerReadingChangedEventArgs>(InclinometerReadingChanged); ;
+            _previousInclinometerReading = _inclinometer.GetCurrentReading();
+        }
+
+        async void InclinometerReadingChanged(object sender, InclinometerReadingChangedEventArgs e)
+        {
+            await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            {
+                _previousTransform.Matrix = _transformGroup.Value;
+
+                Point center = _previousTransform.TransformPoint(new Point(0,0));
+                _scaleTransform.CenterX = center.X;
+                _scaleTransform.CenterY = center.Y;
+                _scaleTransform.ScaleX = _scaleTransform.ScaleY = 1;
+
+                double delta = e.Reading.PitchDegrees - _previousInclinometerReading.PitchDegrees;
+
+                if (delta > _zoomThreshold)
+                {
+                    _scaleTransform.ScaleX = _scaleTransform.ScaleY += _scaleFactorUp;
+                }
+                else if (delta < -_zoomThreshold)
+                {
+                    _scaleTransform.ScaleX = _scaleTransform.ScaleY -= _scaleFactorDown;
+                }
+                _previousInclinometerReading = e.Reading;
+            });
         }
 
         private void InitAccelerometer()
@@ -77,7 +167,8 @@ namespace App1
             _accelerometer = Accelerometer.GetDefault();
             _accelerometer.ReportInterval = _desiredReportInterval;
 
-            _accelerometer.ReadingChanged += new TypedEventHandler<Accelerometer, AccelerometerReadingChangedEventArgs>(AccelReadingChanged);
+            //_accelerometer.ReadingChanged += new TypedEventHandler<Accelerometer, AccelerometerReadingChangedEventArgs>(AccelReadingChanged);
+            _previousAccelReading = _accelerometer.GetCurrentReading();
         }
 
         async private void AccelReadingChanged(object sender, AccelerometerReadingChangedEventArgs e)
@@ -85,20 +176,33 @@ namespace App1
             await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
             {
                 AccelerometerReading reading = e.Reading;
-                if (reading.AccelerationY > _zoomThreshold)
+                //if (reading.AccelerationY > _zoomThreshold)
+                //{
+                //    GyrometerReading gr = _gyrometer.GetCurrentReading();
+                //    Debug.WriteLine("Accelerometer x: " + reading.AccelerationX + ", y: " + reading.AccelerationY + ", z: " + reading.AccelerationZ);
+                //    Debug.WriteLine("Gyrometer x: " + gr.AngularVelocityX + ", y: " + gr.AngularVelocityY + ", z: " + gr.AngularVelocityZ);
+                //    if (gr.AngularVelocityX > 0)
+                //    {
+                //        _compositeTransform.ScaleX = _compositeTransform.ScaleY += _scaleFactorUp;
+                //    }
+                //    else
+                //    {
+                //        _compositeTransform.ScaleX = _compositeTransform.ScaleY -= _scaleFactorDown;
+                //    }
+                //}
+
+                double delta = reading.AccelerationY - _previousAccelReading.AccelerationY;
+                Debug.WriteLine("reading: " + delta);
+
+                if (delta > _zoomThreshold)
                 {
-                    GyrometerReading gr = _gyrometer.GetCurrentReading();
-                    Debug.WriteLine("Accelerometer x: " + reading.AccelerationX + ", y: " + reading.AccelerationY + ", z: " + reading.AccelerationZ);
-                    Debug.WriteLine("Gyrometer x: " + gr.AngularVelocityX + ", y: " + gr.AngularVelocityY + ", z: " + gr.AngularVelocityZ);
-                    if (gr.AngularVelocityX > 0)
-                    {
-                        _compositeTransform.ScaleX = _compositeTransform.ScaleY += _scaleFactor;
-                    }
-                    else
-                    {
-                        _compositeTransform.ScaleX = _compositeTransform.ScaleY -= _scaleFactor;
-                    }
+                    _compositeTransform.ScaleX = _compositeTransform.ScaleY += _scaleFactorUp;
                 }
+                else if (delta < -_zoomThreshold)
+                {
+                    _compositeTransform.ScaleX = _compositeTransform.ScaleY -= _scaleFactorDown;
+                }
+                _previousAccelReading = reading;
             });
         }
 

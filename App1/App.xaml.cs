@@ -17,6 +17,11 @@ using Windows.UI.Xaml.Media.Animation;
 using Windows.UI.Xaml.Navigation;
 using Microsoft.ApplicationInsights;
 
+using Microsoft.WindowsAzure.MobileServices;
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Threading;
+
 // The Blank Application template is documented at http://go.microsoft.com/fwlink/?LinkId=391641
 
 namespace App1
@@ -26,6 +31,12 @@ namespace App1
     /// </summary>
     public sealed partial class App : Application
     {
+
+         //Use this constructor instead after publishing to the cloud
+         public static MobileServiceClient MobileService = new MobileServiceClient(
+              "https://zoompanuit.azure-mobile.net/", "AbckxCrCMsBfQxvwTpVGKQYeqLTcAK17"
+        );
+
         /// <summary>
         /// Allows tracking page views, exceptions and other telemetry through the Microsoft Application Insights service.
         /// </summary>
